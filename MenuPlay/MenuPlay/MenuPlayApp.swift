@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var previousTrackMenuItem: NSMenuItem!
     private var likeMenuItem: NSMenuItem!
     private var settingsWindow: NSWindow?
+    private var aboutWindow: NSWindow?
     private var currentLikedState: Bool = false
 
     private var maxChars: Int {
@@ -91,7 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(likeMenuItem)
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
+
+        let aboutMenuItem = NSMenuItem(title: "About", action: #selector(openAbout), keyEquivalent: "")
+        aboutMenuItem.image = nil
+        menu.addItem(aboutMenuItem)
+
+        let settingsMenuItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsMenuItem.image = nil
+        menu.addItem(settingsMenuItem)
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
 
@@ -389,6 +398,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsWindow = window
     }
 
+    @objc private func openAbout() {
+        if let window = aboutWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 200),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "About MenuPlay"
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: AboutView())
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        aboutWindow = window
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -509,5 +540,64 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .spotifyAuthChanged)) { _ in
             authState = SpotifyAPI.shared.authState
         }
+    }
+}
+
+struct AboutView: View {
+    private let repositoryURL = URL(string: "https://github.com/pro-verstka/menuplay")!
+    private let versionText: String = {
+        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        if let shortVersion, let buildVersion, shortVersion != buildVersion {
+            return "\(shortVersion) (\(buildVersion))"
+        }
+        if let shortVersion {
+            return shortVersion
+        }
+        if let buildVersion {
+            return buildVersion
+        }
+        return "Unknown"
+    }()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("MenuPlay")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Spotify Now Playing in your macOS menu bar.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Divider()
+
+            HStack {
+                Text("Version")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(versionText)
+            }
+
+            HStack {
+                Text("Author")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("pro-verstka")
+            }
+
+            HStack {
+                Text("Git")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Link("github.com/pro-verstka/menuplay", destination: repositoryURL)
+            }
+
+            Spacer()
+        }
+        .padding(20)
+        .frame(width: 340, height: 200)
     }
 }

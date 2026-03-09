@@ -6,6 +6,8 @@ Spotify Now Playing in macOS menubar. Shows album artwork and track info right i
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 ![No dependencies](https://img.shields.io/badge/dependencies-none-green)
 
+<img src="screenshot.png" alt="MenuPlay screenshot" width="300">
+
 ## Features
 
 - Album artwork + "Track — Artist" in the menu bar

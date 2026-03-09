@@ -1,6 +1,13 @@
 import SwiftUI
 import ServiceManagement
 
+private let defaultMaxChars = 20
+private let maxCharsRange = 10...80
+
+private func clampedMaxChars(_ value: Int) -> Int {
+    min(max(value, maxCharsRange.lowerBound), maxCharsRange.upperBound)
+}
+
 @main
 struct MenuPlayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -11,7 +18,6 @@ struct MenuPlayApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var lastTrack: TrackInfo?
@@ -26,13 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var currentLikedState: Bool = false
 
     private var maxChars: Int {
-        let val = UserDefaults.standard.integer(forKey: "maxChars")
-        return val > 0 ? val : 20
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "maxChars") != nil else { return defaultMaxChars }
+        return clampedMaxChars(defaults.integer(forKey: "maxChars"))
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if UserDefaults.standard.object(forKey: "maxChars") == nil {
-            UserDefaults.standard.set(20, forKey: "maxChars")
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "maxChars") == nil {
+            defaults.set(defaultMaxChars, forKey: "maxChars")
+        } else {
+            let sanitizedMaxChars = clampedMaxChars(defaults.integer(forKey: "maxChars"))
+            defaults.set(sanitizedMaxChars, forKey: "maxChars")
         }
 
         NSAppleEventManager.shared().setEventHandler(
@@ -91,20 +102,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         NotificationCenter.default.addObserver(
-            self, selector: #selector(authChanged),
-            name: .spotifyAuthChanged, object: nil
+            self,
+            selector: #selector(authChanged),
+            name: .spotifyAuthChanged,
+            object: nil
         )
 
-        updateNowPlaying()
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            self?.updateNowPlaying()
-        }
+        refreshNowPlaying(forceLikeRefresh: true)
     }
 
     @objc private func authChanged() {
-        likeMenuItem.isEnabled = SpotifyAPI.shared.isAuthorized
         if SpotifyAPI.shared.isAuthorized {
             checkLikeState()
+        } else {
+            updateLikeMenuItem(liked: false)
         }
     }
 
@@ -114,71 +125,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SpotifyAPI.shared.handleCallback(url: url)
     }
 
-    // MARK: - NSMenuDelegate
-
     func menuWillOpen(_ menu: NSMenu) {
-        updatePlayPauseState()
-        checkLikeState()
+        refreshNowPlaying(forceLikeRefresh: true)
     }
-
-    // MARK: - State updates
 
     private func truncate(_ text: String, max: Int) -> String {
         if text.count <= max { return text }
         return String(text.prefix(max)) + "..."
     }
 
-    private func updatePlayPauseState() {
-        let playing = SpotifyService.isPlaying()
-        playPauseMenuItem.title = playing ? "Pause" : "Play"
-        playPauseMenuItem.image = NSImage(
-            systemSymbolName: playing ? "pause.fill" : "play.fill",
-            accessibilityDescription: nil
-        )
+    private func refreshNowPlaying(forceLikeRefresh: Bool = false) {
+        let snapshot = SpotifyService.currentSnapshot()
+        applySnapshot(snapshot, forceLikeRefresh: forceLikeRefresh)
+        scheduleNextUpdate(for: snapshot.playbackState)
     }
 
-    private func updateLikeMenuItem(liked: Bool) {
-        currentLikedState = liked
-        likeMenuItem.title = liked ? "Dislike" : "Like"
-        likeMenuItem.image = NSImage(
-            systemSymbolName: liked ? "heart.slash" : "heart",
-            accessibilityDescription: nil
-        )
-        likeMenuItem.isEnabled = SpotifyAPI.shared.isAuthorized
-    }
+    private func applySnapshot(_ snapshot: SpotifySnapshot, forceLikeRefresh: Bool) {
+        updatePlaybackControls(for: snapshot.playbackState)
 
-    private func checkLikeState() {
-        guard SpotifyAPI.shared.isAuthorized,
-              let track = lastTrack else {
-            updateLikeMenuItem(liked: false)
-            return
-        }
-        let bareID = SpotifyService.bareTrackID(track.trackID)
-        SpotifyAPI.shared.isTrackSaved(trackID: bareID) { [weak self] saved in
-            self?.updateLikeMenuItem(liked: saved)
-        }
-    }
-
-    private func updateNowPlaying() {
-        guard let track = SpotifyService.getCurrentTrack() else {
-            statusItem.button?.title = ""
-            statusItem.button?.image = makeTextImage("♪")
-            lastTrack = nil
-            lastArtworkURL = nil
-            artworkMenuItem.isHidden = true
-            trackInfoMenuItem.isHidden = true
+        guard let track = snapshot.track else {
+            showPlaybackStatus(snapshot.playbackState)
             return
         }
 
-        if track == lastTrack { return }
+        let shouldRefreshLikeState = forceLikeRefresh || track.trackID != lastTrack?.trackID
+        if track == lastTrack {
+            if shouldRefreshLikeState {
+                checkLikeState()
+            }
+            return
+        }
+
         lastTrack = track
 
-        let limit = maxChars
-        let displayText = truncate("\(track.name) — \(track.artist)", max: limit)
+        let displayText = truncate("\(track.name) — \(track.artist)", max: maxChars)
         statusItem.button?.title = " \(displayText)"
 
-        updateTrackInfoView(track)
-        checkLikeState()
+        updateInfoMenu(primary: track.name, secondary: track.artist, tertiary: track.album)
+
+        if shouldRefreshLikeState {
+            checkLikeState()
+        }
 
         if track.artworkURL != lastArtworkURL {
             lastArtworkURL = track.artworkURL
@@ -190,46 +177,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.statusItem.button?.image = image.map(Self.roundedImage(_:)) ?? self.makeTextImage("♪")
             }
 
-            let artSize: CGFloat = 250
-            SpotifyService.loadArtwork(from: track.artworkURL, size: artSize) { [weak self] image in
+            let artworkSize: CGFloat = 250
+            SpotifyService.loadArtwork(from: track.artworkURL, size: artworkSize) { [weak self] image in
                 guard let self, self.lastArtworkURL == track.artworkURL else { return }
                 guard let image else { return }
-                let padding: CGFloat = 12
-                let imageView = NSImageView(image: image)
-                imageView.imageScaling = .scaleProportionallyUpOrDown
-                imageView.frame = NSRect(x: padding, y: 0, width: artSize, height: artSize)
-                imageView.wantsLayer = true
-                imageView.layer?.cornerRadius = 6
-                imageView.layer?.masksToBounds = true
-                let container = NSView(frame: NSRect(x: 0, y: 0, width: artSize + padding * 2, height: artSize + 6))
-                container.addSubview(imageView)
-                self.artworkMenuItem.view = container
-                self.artworkMenuItem.isHidden = false
+                self.updateArtworkMenuItem(image: image, size: artworkSize)
             }
         }
     }
 
-    private func updateTrackInfoView(_ track: TrackInfo) {
+    private func scheduleNextUpdate(for playbackState: SpotifyPlaybackState) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: playbackState.pollInterval, repeats: false) { [weak self] _ in
+            self?.refreshNowPlaying()
+        }
+    }
+
+    private func updatePlaybackControls(for playbackState: SpotifyPlaybackState) {
+        playPauseMenuItem.title = playbackState.playPauseTitle
+        playPauseMenuItem.image = NSImage(
+            systemSymbolName: playbackState.playPauseSymbolName,
+            accessibilityDescription: nil
+        )
+        playPauseMenuItem.isEnabled = playbackState != .notRunning
+        nextTrackMenuItem.isEnabled = playbackState.canControlPlayback
+        previousTrackMenuItem.isEnabled = playbackState.canControlPlayback
+    }
+
+    private func updateLikeMenuItem(liked: Bool) {
+        currentLikedState = liked
+        likeMenuItem.title = liked ? "Dislike" : "Like"
+        likeMenuItem.image = NSImage(
+            systemSymbolName: liked ? "heart.slash" : "heart",
+            accessibilityDescription: nil
+        )
+        likeMenuItem.isEnabled = SpotifyAPI.shared.isAuthorized && lastTrack != nil
+    }
+
+    private func checkLikeState() {
+        guard SpotifyAPI.shared.isAuthorized,
+              let track = lastTrack else {
+            updateLikeMenuItem(liked: false)
+            return
+        }
+
+        updateLikeMenuItem(liked: false)
+
+        let currentTrackID = track.trackID
+        let bareID = SpotifyService.bareTrackID(currentTrackID)
+        SpotifyAPI.shared.isTrackSaved(trackID: bareID) { [weak self] saved in
+            guard let self,
+                  self.lastTrack?.trackID == currentTrackID else { return }
+            self.updateLikeMenuItem(liked: saved)
+        }
+    }
+
+    private func showPlaybackStatus(_ playbackState: SpotifyPlaybackState) {
+        statusItem.button?.title = ""
+        statusItem.button?.image = makeTextImage("♪")
+        lastTrack = nil
+        lastArtworkURL = nil
+        artworkMenuItem.isHidden = true
+        updateLikeMenuItem(liked: false)
+        updateInfoMenu(primary: playbackState.statusTitle, secondary: playbackState.statusSubtitle)
+    }
+
+    private func updateInfoMenu(primary: String, secondary: String? = nil, tertiary: String? = nil) {
+        let lines: [(text: String, font: NSFont, color: NSColor)] = [
+            (primary, NSFont.systemFont(ofSize: 13, weight: .semibold), .labelColor),
+            (secondary ?? "", NSFont.systemFont(ofSize: 11), .secondaryLabelColor),
+            (tertiary ?? "", NSFont.systemFont(ofSize: 11), .tertiaryLabelColor),
+        ].filter { !$0.text.isEmpty }
+
         let width: CGFloat = 250
         let padding: CGFloat = 12
+        let lineHeight: CGFloat = 16
+        let containerHeight = CGFloat(lines.count) * lineHeight + 20
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: containerHeight))
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 60))
+        let labels = lines.map { line -> NSTextField in
+            let label = NSTextField(labelWithString: line.text)
+            label.font = line.font
+            label.textColor = line.color
+            label.lineBreakMode = .byTruncatingTail
+            return label
+        }
 
-        let nameLabel = NSTextField(labelWithString: track.name)
-        nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        nameLabel.lineBreakMode = .byTruncatingTail
-
-        let artistLabel = NSTextField(labelWithString: track.artist)
-        artistLabel.font = NSFont.systemFont(ofSize: 11)
-        artistLabel.textColor = .secondaryLabelColor
-        artistLabel.lineBreakMode = .byTruncatingTail
-
-        let albumLabel = NSTextField(labelWithString: track.album)
-        albumLabel.font = NSFont.systemFont(ofSize: 11)
-        albumLabel.textColor = .tertiaryLabelColor
-        albumLabel.lineBreakMode = .byTruncatingTail
-
-        let stack = NSStackView(views: [nameLabel, artistLabel, albumLabel])
+        let stack = NSStackView(views: labels)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
@@ -239,12 +273,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: padding),
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -padding),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
         ])
 
         trackInfoMenuItem.view = container
         trackInfoMenuItem.isHidden = false
+    }
+
+    private func updateArtworkMenuItem(image: NSImage, size: CGFloat) {
+        let padding: CGFloat = 12
+        let imageView = NSImageView(image: image)
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.frame = NSRect(x: padding, y: 0, width: size, height: size)
+        imageView.wantsLayer = true
+        imageView.layer?.cornerRadius = 6
+        imageView.layer?.masksToBounds = true
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: size + padding * 2, height: size + 6))
+        container.addSubview(imageView)
+        artworkMenuItem.view = container
+        artworkMenuItem.isHidden = false
     }
 
     private static func roundedImage(_ image: NSImage) -> NSImage {
@@ -260,25 +309,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func makeTextImage(_ text: String) -> NSImage {
-        let attr: [NSAttributedString.Key: Any] = [
+        let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 14)
         ]
-        let size = (text as NSString).size(withAttributes: attr)
+        let size = (text as NSString).size(withAttributes: attributes)
         let image = NSImage(size: size, flipped: false) { rect in
-            (text as NSString).draw(in: rect, withAttributes: attr)
+            (text as NSString).draw(in: rect, withAttributes: attributes)
             return true
         }
         image.isTemplate = true
         return image
     }
 
-    // MARK: - Actions
-
     @objc private func previousTrack() {
         SpotifyService.previousTrack()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.lastTrack = nil
-            self?.updateNowPlaying()
+            self?.refreshNowPlaying(forceLikeRefresh: true)
         }
     }
 
@@ -286,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SpotifyService.playPause()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.lastTrack = nil
-            self?.updateNowPlaying()
+            self?.refreshNowPlaying(forceLikeRefresh: true)
         }
     }
 
@@ -294,21 +341,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SpotifyService.nextTrack()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.lastTrack = nil
-            self?.updateNowPlaying()
+            self?.refreshNowPlaying(forceLikeRefresh: true)
         }
     }
 
     @objc private func toggleLike() {
         guard SpotifyAPI.shared.isAuthorized, let track = lastTrack else { return }
+        let currentTrackID = track.trackID
         let bareID = SpotifyService.bareTrackID(track.trackID)
 
         if currentLikedState {
             SpotifyAPI.shared.removeTrack(trackID: bareID) { [weak self] success in
-                if success { self?.updateLikeMenuItem(liked: false) }
+                guard let self,
+                      success,
+                      self.lastTrack?.trackID == currentTrackID else { return }
+                self.updateLikeMenuItem(liked: false)
             }
         } else {
             SpotifyAPI.shared.saveTrack(trackID: bareID) { [weak self] success in
-                if success { self?.updateLikeMenuItem(liked: true) }
+                guard let self,
+                      success,
+                      self.lastTrack?.trackID == currentTrackID else { return }
+                self.updateLikeMenuItem(liked: true)
             }
         }
     }
@@ -321,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 390),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -340,13 +394,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
-// MARK: - Settings View
-
 struct SettingsView: View {
-    @AppStorage("maxChars") private var maxChars: Int = 20
+    @AppStorage("maxChars") private var maxChars: Int = defaultMaxChars
     @AppStorage("spotifyClientID") private var clientID: String = ""
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
-    @State private var isConnected: Bool = SpotifyAPI.shared.isAuthorized
+    @State private var launchAtLoginError: String?
+    @State private var authState: SpotifyAuthState = SpotifyAPI.shared.authState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -357,7 +410,7 @@ struct SettingsView: View {
                     .frame(width: 60)
                     .textFieldStyle(.roundedBorder)
             }
-            Text("Limits the track title length in the menu bar.")
+            Text("Limits the track title length in the menu bar (\(maxCharsRange.lowerBound)-\(maxCharsRange.upperBound)).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -371,10 +424,19 @@ struct SettingsView: View {
                         } else {
                             try SMAppService.mainApp.unregister()
                         }
+                        launchAtLoginError = nil
                     } catch {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
+                        launchAtLoginError = error.localizedDescription
                     }
                 }
+
+            if let launchAtLoginError {
+                Text("Launch at login failed: \(launchAtLoginError)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Divider()
 
@@ -397,8 +459,15 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if let errorMessage = authState.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack {
-                if isConnected {
+                if authState.isAuthorized {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                     Text("Connected")
@@ -406,20 +475,39 @@ struct SettingsView: View {
                     Spacer()
                     Button("Disconnect") {
                         SpotifyAPI.shared.logout()
-                        isConnected = false
+                    }
+                } else if authState == .authorizing {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Waiting for Spotify callback...")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") {
+                        SpotifyAPI.shared.cancelAuthorization()
                     }
                 } else {
                     Button("Connect to Spotify") {
                         SpotifyAPI.shared.authorize()
                     }
-                    .disabled(clientID.isEmpty)
+                    .disabled(clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
         .padding(20)
-        .frame(width: 360)
+        .frame(width: 380)
+        .onAppear {
+            maxChars = clampedMaxChars(maxChars)
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            authState = SpotifyAPI.shared.authState
+        }
+        .onChange(of: maxChars) { _, newValue in
+            let clampedValue = clampedMaxChars(newValue)
+            if newValue != clampedValue {
+                maxChars = clampedValue
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .spotifyAuthChanged)) { _ in
-            isConnected = SpotifyAPI.shared.isAuthorized
+            authState = SpotifyAPI.shared.authState
         }
     }
 }

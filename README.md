@@ -1,6 +1,6 @@
 # MenuPlay
 
-Spotify Now Playing in macOS menubar. Shows album artwork and track info right in the menu bar.
+Spotify Now Playing in macOS menubar. A vibecoded app that shows album artwork and track info right in the menu bar.
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)

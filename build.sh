@@ -8,8 +8,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O \
     -o "$APP/Contents/MacOS/MenuPlay" \
     -framework AppKit \
+    -framework Security \
     -framework SwiftUI \
     MenuPlay/MenuPlay/MenuPlayApp.swift \
+    MenuPlay/MenuPlay/KeychainStore.swift \
     MenuPlay/MenuPlay/SpotifyService.swift \
     MenuPlay/MenuPlay/SpotifyAPI.swift
 

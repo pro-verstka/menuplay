@@ -29,6 +29,12 @@ Spotify Now Playing in macOS menubar. A vibecoded app that shows album artwork a
 
 The release build is unsigned and not notarized, so macOS Gatekeeper may show a warning on first launch.
 
+If macOS says the app is damaged, remove the quarantine attribute after unpacking the release:
+
+```bash
+xattr -rd com.apple.quarantine /Applications/MenuPlay.app
+```
+
 ## Custom build
 
 Requires macOS 13+ and Swift toolchain (Xcode Command Line Tools).

@@ -18,12 +18,23 @@ Spotify Now Playing in macOS menubar. A vibecoded app that shows album artwork a
 - Launch at login
 - No external dependencies
 
-## Build
+## Spotify API setup (optional, for Like/Dislike)
+
+1. Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+2. Add redirect URI: `menuplay://callback`
+3. Copy the **Client ID**
+4. In MenuPlay: Settings → paste Client ID → Connect to Spotify
+
+## Releases
+
+The release build is unsigned and not notarized, so macOS Gatekeeper may show a warning on first launch.
+
+## Custom build
 
 Requires macOS 13+ and Swift toolchain (Xcode Command Line Tools).
 
 ```bash
-./build.sh
+./scripts/build.sh
 ```
 
 The app bundle will be at `build/MenuPlay.app`.
@@ -31,10 +42,3 @@ The app bundle will be at `build/MenuPlay.app`.
 ```bash
 open build/MenuPlay.app
 ```
-
-## Spotify API setup (optional, for Like/Dislike)
-
-1. Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
-2. Add redirect URI: `menuplay://callback`
-3. Copy the **Client ID**
-4. In MenuPlay: Settings → paste Client ID → Connect to Spotify

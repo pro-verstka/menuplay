@@ -1,11 +1,19 @@
 #!/bin/bash
-set -e
-cd "$(dirname "$0")"
+set -euo pipefail
 
-APP="build/MenuPlay.app"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cd "$(dirname "$0")/.."
 
-swiftc -O \
+BUILD_DIR="$PWD/build"
+APP="$BUILD_DIR/MenuPlay.app"
+MODULE_CACHE="$BUILD_DIR/module-cache"
+
+rm -rf "$APP" "$MODULE_CACHE"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$MODULE_CACHE"
+
+export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE"
+export SWIFT_MODULECACHE_PATH="$MODULE_CACHE"
+
+xcrun --sdk macosx swiftc -O \
     -o "$APP/Contents/MacOS/MenuPlay" \
     -framework AppKit \
     -framework Security \

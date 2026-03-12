@@ -13,6 +13,19 @@ BUILT_AT="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
 REF_LABEL="Branch"
 RANGE_END="$CURRENT_SHA"
 
+build_commit_list() {
+    local range="$1"
+    while IFS= read -r subject; do
+        case "$subject" in
+            ci:*|ci\(*\):*)
+                continue
+                ;;
+        esac
+
+        printf -- "- %s\n" "$subject"
+    done < <(git log --reverse --format='%s' "$range")
+}
+
 if [[ "$REF_NAME" == v* ]] && git rev-parse -q --verify "refs/tags/${REF_NAME}" >/dev/null 2>&1; then
     REF_LABEL="Tag"
     RANGE_END="$REF_NAME"
@@ -26,10 +39,10 @@ fi
 
 if [ -n "$PREVIOUS_TAG" ]; then
     SECTION_TITLE="Commits since \`${PREVIOUS_TAG}\`"
-    COMMITS="$(git log --reverse --format='- %s' "${PREVIOUS_TAG}..${RANGE_END}")"
+    COMMITS="$(build_commit_list "${PREVIOUS_TAG}..${RANGE_END}")"
 else
     SECTION_TITLE="Commits in repository history"
-    COMMITS="$(git log --reverse --format='- %s' "$RANGE_END")"
+    COMMITS="$(build_commit_list "$RANGE_END")"
 fi
 
 if [ -z "$COMMITS" ]; then

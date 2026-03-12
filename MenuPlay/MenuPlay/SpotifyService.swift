@@ -8,6 +8,19 @@ struct TrackInfo: Equatable {
     let trackID: String
 }
 
+struct TrackEnhancementMetadata: Equatable {
+    let albumID: String
+    let primaryArtistID: String
+    let albumReleaseYear: String?
+
+    func albumText(for albumName: String) -> String {
+        guard let albumReleaseYear, !albumReleaseYear.isEmpty else {
+            return albumName
+        }
+        return "\(albumName) (\(albumReleaseYear))"
+    }
+}
+
 enum SpotifyPlaybackState: String, Equatable {
     case notRunning
     case stopped

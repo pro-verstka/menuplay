@@ -8,6 +8,13 @@ private func clampedMaxChars(_ value: Int) -> Int {
     min(max(value, maxCharsRange.lowerBound), maxCharsRange.upperBound)
 }
 
+private struct InfoMenuLine {
+    let text: String
+    let font: NSFont
+    let color: NSColor
+    let action: (() -> Void)?
+}
+
 @main
 struct MenuPlayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -55,10 +62,67 @@ private final class ArtworkMenuView: NSView {
     }
 }
 
+private final class TrackInfoLineView: NSView {
+    private let action: (() -> Void)?
+
+    init(text: String, font: NSFont, color: NSColor, action: (() -> Void)? = nil) {
+        self.action = action
+        super.init(frame: .zero)
+
+        let label = NSTextField(labelWithString: text)
+        label.font = font
+        label.textColor = color
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(label)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor),
+            label.topAnchor.constraint(equalTo: topAnchor),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 16),
+        ])
+
+        if action != nil {
+            toolTip = "Open in Spotify"
+            setAccessibilityElement(true)
+            setAccessibilityLabel(text)
+            setAccessibilityRole(.button)
+        } else {
+            setAccessibilityElement(true)
+            setAccessibilityLabel(text)
+            setAccessibilityRole(.staticText)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func resetCursorRects() {
+        guard action != nil else { return }
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let action else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(location) else { return }
+        action()
+        enclosingMenuItem?.menu?.cancelTracking()
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var lastTrack: TrackInfo?
+    private var lastTrackMetadata: TrackEnhancementMetadata?
     private var lastArtworkURL: String?
     private var artworkMenuItem: NSMenuItem!
     private var trackInfoMenuItem: NSMenuItem!
@@ -161,8 +225,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func authChanged() {
         if SpotifyAPI.shared.isAuthorized {
             checkLikeState()
+            if let track = lastTrack {
+                if let metadata = lastTrackMetadata {
+                    showEnhancedTrackInfo(for: track, metadata: metadata)
+                } else {
+                    requestTrackMetadata(for: track)
+                }
+            }
         } else {
+            lastTrackMetadata = nil
             updateLikeMenuItem(liked: false)
+            if let track = lastTrack {
+                showLegacyTrackInfo(for: track)
+            }
         }
     }
 
@@ -204,14 +279,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         lastTrack = track
+        lastTrackMetadata = nil
 
         let displayText = truncate("\(track.name) — \(track.artist)", max: maxChars)
         statusItem.button?.title = " \(displayText)"
 
-        updateInfoMenu(primary: track.name, secondary: track.artist, tertiary: track.album)
+        showLegacyTrackInfo(for: track)
 
         if shouldRefreshLikeState {
             checkLikeState()
+        }
+
+        if SpotifyAPI.shared.isAuthorized {
+            requestTrackMetadata(for: track)
         }
 
         if track.artworkURL != lastArtworkURL {
@@ -283,34 +363,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.title = ""
         statusItem.button?.image = makeTextImage("♪")
         lastTrack = nil
+        lastTrackMetadata = nil
         lastArtworkURL = nil
         artworkMenuItem.isHidden = true
         updateLikeMenuItem(liked: false)
-        updateInfoMenu(primary: playbackState.statusTitle, secondary: playbackState.statusSubtitle)
+        updateInfoMenu(lines: [
+            InfoMenuLine(
+                text: playbackState.statusTitle,
+                font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                color: .labelColor,
+                action: nil
+            ),
+            InfoMenuLine(
+                text: playbackState.statusSubtitle,
+                font: NSFont.systemFont(ofSize: 11),
+                color: .secondaryLabelColor,
+                action: nil
+            ),
+        ].filter { !$0.text.isEmpty })
     }
 
-    private func updateInfoMenu(primary: String, secondary: String? = nil, tertiary: String? = nil) {
-        let lines: [(text: String, font: NSFont, color: NSColor)] = [
-            (primary, NSFont.systemFont(ofSize: 13, weight: .semibold), .labelColor),
-            (secondary ?? "", NSFont.systemFont(ofSize: 11), .secondaryLabelColor),
-            (tertiary ?? "", NSFont.systemFont(ofSize: 11), .tertiaryLabelColor),
-        ].filter { !$0.text.isEmpty }
-
+    private func updateInfoMenu(lines: [InfoMenuLine]) {
         let width: CGFloat = 250
         let padding: CGFloat = 12
         let lineHeight: CGFloat = 16
         let containerHeight = CGFloat(lines.count) * lineHeight + 20
         let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: containerHeight))
 
-        let labels = lines.map { line -> NSTextField in
-            let label = NSTextField(labelWithString: line.text)
-            label.font = line.font
-            label.textColor = line.color
-            label.lineBreakMode = .byTruncatingTail
-            return label
+        let views = lines.map { line in
+            TrackInfoLineView(text: line.text, font: line.font, color: line.color, action: line.action)
         }
 
-        let stack = NSStackView(views: labels)
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
@@ -326,6 +410,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         trackInfoMenuItem.view = container
         trackInfoMenuItem.isHidden = false
+    }
+
+    private func showLegacyTrackInfo(for track: TrackInfo) {
+        updateInfoMenu(lines: [
+            InfoMenuLine(
+                text: track.name,
+                font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                color: .labelColor,
+                action: nil
+            ),
+            InfoMenuLine(
+                text: track.artist,
+                font: NSFont.systemFont(ofSize: 11),
+                color: .secondaryLabelColor,
+                action: nil
+            ),
+            InfoMenuLine(
+                text: track.album,
+                font: NSFont.systemFont(ofSize: 11),
+                color: .tertiaryLabelColor,
+                action: nil
+            ),
+        ].filter { !$0.text.isEmpty })
+    }
+
+    private func showEnhancedTrackInfo(for track: TrackInfo, metadata: TrackEnhancementMetadata) {
+        let bareTrackID = SpotifyService.bareTrackID(track.trackID)
+        updateInfoMenu(lines: [
+            InfoMenuLine(
+                text: track.name,
+                font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                color: .labelColor,
+                action: { [weak self] in
+                    self?.openSpotifyResource(
+                        appURLString: "spotify:track:\(bareTrackID)",
+                        webURLString: "https://open.spotify.com/track/\(bareTrackID)"
+                    )
+                }
+            ),
+            InfoMenuLine(
+                text: track.artist,
+                font: NSFont.systemFont(ofSize: 11),
+                color: .secondaryLabelColor,
+                action: { [weak self] in
+                    self?.openSpotifyResource(
+                        appURLString: "spotify:artist:\(metadata.primaryArtistID)",
+                        webURLString: "https://open.spotify.com/artist/\(metadata.primaryArtistID)"
+                    )
+                }
+            ),
+            InfoMenuLine(
+                text: metadata.albumText(for: track.album),
+                font: NSFont.systemFont(ofSize: 11),
+                color: .tertiaryLabelColor,
+                action: { [weak self] in
+                    self?.openSpotifyResource(
+                        appURLString: "spotify:album:\(metadata.albumID)",
+                        webURLString: "https://open.spotify.com/album/\(metadata.albumID)"
+                    )
+                }
+            ),
+        ].filter { !$0.text.isEmpty })
+    }
+
+    private func requestTrackMetadata(for track: TrackInfo) {
+        let currentTrackID = track.trackID
+        SpotifyAPI.shared.fetchTrackMetadata(trackID: currentTrackID) { [weak self] metadata in
+            guard let self,
+                  SpotifyAPI.shared.isAuthorized,
+                  self.lastTrack?.trackID == currentTrackID,
+                  let metadata else { return }
+
+            self.lastTrackMetadata = metadata
+            self.showEnhancedTrackInfo(for: track, metadata: metadata)
+        }
+    }
+
+    private func openSpotifyResource(appURLString: String, webURLString: String) {
+        if let appURL = URL(string: appURLString),
+           NSWorkspace.shared.open(appURL) {
+            return
+        }
+
+        guard let webURL = URL(string: webURLString) else { return }
+        NSWorkspace.shared.open(webURL)
     }
 
     private func updateArtworkMenuItem(image: NSImage, size: CGFloat) {

@@ -54,6 +54,8 @@ final class SpotifyAPI {
     private var authorizationTimeoutWorkItem: DispatchWorkItem?
     private var cachedTokenBundle: TokenBundle?
     private var hasLoadedTokenBundle = false
+    private var trackMetadataCache: [String: TrackEnhancementMetadata] = [:]
+    private var pendingTrackMetadataRequests: [String: [(TrackEnhancementMetadata?) -> Void]] = [:]
 
     private(set) var authState: SpotifyAuthState = .unauthorized
 
@@ -314,6 +316,37 @@ final class SpotifyAPI {
         }
     }
 
+    func fetchTrackMetadata(trackID: String, completion: @escaping (TrackEnhancementMetadata?) -> Void) {
+        guard isAuthorized else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
+        let bareID = SpotifyService.bareTrackID(trackID)
+        if let cached = trackMetadataCache[bareID] {
+            DispatchQueue.main.async { completion(cached) }
+            return
+        }
+
+        if pendingTrackMetadataRequests[bareID] != nil {
+            pendingTrackMetadataRequests[bareID]?.append(completion)
+            return
+        }
+
+        pendingTrackMetadataRequests[bareID] = [completion]
+        apiRequest(path: "/v1/tracks/\(bareID)") { [weak self] data in
+            guard let self else { return }
+            let metadata = data.flatMap(Self.parseTrackMetadata)
+
+            if let metadata {
+                self.trackMetadataCache[bareID] = metadata
+            }
+
+            let completions = self.pendingTrackMetadataRequests.removeValue(forKey: bareID) ?? []
+            completions.forEach { $0(metadata) }
+        }
+    }
+
     private func apiRequest(
         path: String,
         method: String = "GET",
@@ -477,6 +510,32 @@ final class SpotifyAPI {
 
     private static func parseJSONObject(data: Data) -> [String: Any]? {
         try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func parseTrackMetadata(data: Data) -> TrackEnhancementMetadata? {
+        guard let payload = parseJSONObject(data: data),
+              let album = payload["album"] as? [String: Any],
+              let albumID = album["id"] as? String,
+              !albumID.isEmpty,
+              let artists = payload["artists"] as? [[String: Any]],
+              let primaryArtist = artists.first,
+              let primaryArtistID = primaryArtist["id"] as? String,
+              !primaryArtistID.isEmpty else {
+            return nil
+        }
+
+        let releaseDate = album["release_date"] as? String
+        let releaseYear = releaseDate.flatMap { date -> String? in
+            let trimmedDate = date.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedDate.count >= 4 else { return nil }
+            return String(trimmedDate.prefix(4))
+        }
+
+        return TrackEnhancementMetadata(
+            albumID: albumID,
+            primaryArtistID: primaryArtistID,
+            albumReleaseYear: releaseYear
+        )
     }
 
     private static func spotifyAPIErrorMessage(payload: [String: Any]?, fallback: String) -> String {

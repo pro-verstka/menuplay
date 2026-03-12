@@ -26,6 +26,11 @@ jobs:
       - name: Build app bundle
         run: ./scripts/build.sh
 
+      - name: Read app version
+        run: |
+          APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/MenuPlay.app/Contents/Info.plist)
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
+
       - name: Package release assets
         run: ./scripts/package-release.sh build/MenuPlay.app dist
 
@@ -42,5 +47,5 @@ jobs:
             dist/MenuPlay-macos.zip \
             dist/MenuPlay-macos.dmg \
             --target "${GITHUB_SHA}" \
-            --title "Main branch build" \
+            --title "MenuPlay ${APP_VERSION}" \
             --notes-file release-notes.md

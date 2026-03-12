@@ -17,6 +17,44 @@ struct MenuPlayApp: App {
     }
 }
 
+private final class ArtworkMenuView: NSView {
+    private let onClick: () -> Void
+
+    init(image: NSImage, size: CGFloat, onClick: @escaping () -> Void) {
+        self.onClick = onClick
+        super.init(frame: NSRect(x: 0, y: 0, width: size + 24, height: size + 6))
+
+        let imageView = NSImageView(image: image)
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.frame = NSRect(x: 12, y: 0, width: size, height: size)
+        imageView.wantsLayer = true
+        imageView.layer?.cornerRadius = 6
+        imageView.layer?.masksToBounds = true
+
+        addSubview(imageView)
+        toolTip = "Play/Pause"
+        setAccessibilityElement(true)
+        setAccessibilityLabel("Play/Pause")
+        setAccessibilityRole(.button)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(location) else { return }
+        onClick()
+        enclosingMenuItem?.menu?.cancelTracking()
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
@@ -291,17 +329,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateArtworkMenuItem(image: NSImage, size: CGFloat) {
-        let padding: CGFloat = 12
-        let imageView = NSImageView(image: image)
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.frame = NSRect(x: padding, y: 0, width: size, height: size)
-        imageView.wantsLayer = true
-        imageView.layer?.cornerRadius = 6
-        imageView.layer?.masksToBounds = true
-
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: size + padding * 2, height: size + 6))
-        container.addSubview(imageView)
-        artworkMenuItem.view = container
+        artworkMenuItem.view = ArtworkMenuView(image: image, size: size) { [weak self] in
+            self?.playPause()
+        }
         artworkMenuItem.isHidden = false
     }
 
@@ -549,7 +579,7 @@ struct AboutView: View {
         let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 
-        if let shortVersion, let buildVersion, shortVersion != buildVersion {
+        if let shortVersion, let buildVersion {
             return "\(shortVersion) (\(buildVersion))"
         }
         if let shortVersion {

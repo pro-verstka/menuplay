@@ -8,15 +8,28 @@ fi
 
 OUTPUT_FILE="$1"
 CURRENT_SHA="${GITHUB_SHA:-$(git rev-parse HEAD)}"
-BRANCH_NAME="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
+REF_NAME="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 BUILT_AT="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+REF_LABEL="Branch"
+RANGE_END="$CURRENT_SHA"
 
-if PREVIOUS_TAG=$(git describe --tags --abbrev=0 --exclude='rolling-main' "$CURRENT_SHA" 2>/dev/null); then
+if [[ "$REF_NAME" == v* ]] && git rev-parse -q --verify "refs/tags/${REF_NAME}" >/dev/null 2>&1; then
+    REF_LABEL="Tag"
+    RANGE_END="$REF_NAME"
+fi
+
+if [[ "$RANGE_END" == v* ]]; then
+    PREVIOUS_TAG="$(git describe --tags --abbrev=0 --exclude='rolling-main' "${RANGE_END}^" 2>/dev/null || true)"
+else
+    PREVIOUS_TAG="$(git describe --tags --abbrev=0 --exclude='rolling-main' "$CURRENT_SHA" 2>/dev/null || true)"
+fi
+
+if [ -n "$PREVIOUS_TAG" ]; then
     SECTION_TITLE="Commits since \`${PREVIOUS_TAG}\`"
-    COMMITS="$(git log --reverse --format='- %s' "${PREVIOUS_TAG}..${CURRENT_SHA}")"
+    COMMITS="$(git log --reverse --format='- %s' "${PREVIOUS_TAG}..${RANGE_END}")"
 else
     SECTION_TITLE="Commits in repository history"
-    COMMITS="$(git log --reverse --format='- %s' "$CURRENT_SHA")"
+    COMMITS="$(git log --reverse --format='- %s' "$RANGE_END")"
 fi
 
 if [ -z "$COMMITS" ]; then
@@ -26,7 +39,7 @@ fi
 cat > "$OUTPUT_FILE" <<EOF
 Automated build from \`${CURRENT_SHA}\`.
 
-- Branch: \`${BRANCH_NAME}\`
+- ${REF_LABEL}: \`${REF_NAME}\`
 - Commit: \`${CURRENT_SHA}\`
 - Built at: \`${BUILT_AT}\`
 - Assets: \`MenuPlay-macos.zip\`, \`MenuPlay-macos.dmg\`

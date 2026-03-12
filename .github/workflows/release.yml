@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build app bundle
         run: ./scripts/build.sh
@@ -28,17 +30,7 @@ jobs:
         run: ./scripts/package-release.sh build/MenuPlay.app dist
 
       - name: Write release notes
-        run: |
-          cat <<EOF > release-notes.md
-          Automated build from \`${GITHUB_SHA}\`.
-
-          - Branch: \`${GITHUB_REF_NAME}\`
-          - Commit: \`${GITHUB_SHA}\`
-          - Built at: \`$(date -u +"%Y-%m-%d %H:%M:%S UTC")\`
-          - Assets: \`MenuPlay-macos.zip\`, \`MenuPlay-macos.dmg\`
-
-          This build is unsigned and not notarized.
-          EOF
+        run: ./scripts/generate-release-notes.sh release-notes.md
 
       - name: Replace rolling release
         env:

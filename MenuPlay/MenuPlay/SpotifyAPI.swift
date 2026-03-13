@@ -56,6 +56,7 @@ final class SpotifyAPI {
     private var hasLoadedTokenBundle = false
     private var trackMetadataCache: [String: TrackEnhancementMetadata] = [:]
     private var pendingTrackMetadataRequests: [String: [(TrackEnhancementMetadata?) -> Void]] = [:]
+    private var pendingRefreshCompletions: [(Bool) -> Void]?
 
     private(set) var authState: SpotifyAuthState = .unauthorized
 
@@ -204,12 +205,19 @@ final class SpotifyAPI {
     }
 
     private func refreshAccessToken(completion: @escaping (Bool) -> Void) {
+        if pendingRefreshCompletions != nil {
+            pendingRefreshCompletions?.append(completion)
+            return
+        }
+
         guard let refresh = refreshToken else {
             clearTokens()
             setAuthState(.failed("Spotify session expired. Connect again."))
             completion(false)
             return
         }
+
+        pendingRefreshCompletions = [completion]
 
         let params = [
             "grant_type": "refresh_token",
@@ -222,7 +230,9 @@ final class SpotifyAPI {
                 self.clearTokens()
                 self.setAuthState(.failed(message ?? "Couldn't refresh the Spotify session."))
             }
-            completion(success)
+            let completions = self.pendingRefreshCompletions ?? []
+            self.pendingRefreshCompletions = nil
+            completions.forEach { $0(success) }
         }
     }
 
@@ -372,12 +382,14 @@ final class SpotifyAPI {
         URLSession.shared.dataTask(with: request) { data, response, _ in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if status == 401 && !retried {
-                self.refreshAccessToken { refreshed in
-                    guard refreshed else {
-                        DispatchQueue.main.async { completion(nil) }
-                        return
+                DispatchQueue.main.async {
+                    self.refreshAccessToken { refreshed in
+                        guard refreshed else {
+                            DispatchQueue.main.async { completion(nil) }
+                            return
+                        }
+                        self.apiRequest(path: path, method: method, body: body, retried: true, completion: completion)
                     }
-                    self.apiRequest(path: path, method: method, body: body, retried: true, completion: completion)
                 }
                 return
             }

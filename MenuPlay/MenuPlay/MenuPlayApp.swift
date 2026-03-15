@@ -270,6 +270,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var aboutWindow: NSWindow?
     private var updateMenuItem: NSMenuItem!
     private var currentLikedState: Bool = false
+    private lazy var menuPlaceholder: NSImage = Self.makePlaceholderArtwork(size: 250)
+    private lazy var menubarPlaceholder: NSImage = Self.makePlaceholderArtwork(size: 18)
     private var lastPlayerPosition: Double = 0
     private var lastTrackDuration: Double = 0
     private var lastIsPlaying: Bool = false
@@ -304,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         artworkMenuItem = NSMenuItem()
         artworkMenuItem.isEnabled = false
-        artworkMenuItem.isHidden = true
+        updateArtworkMenuItem(image: menuPlaceholder, size: 250)
         menu.addItem(artworkMenuItem)
 
         trackInfoMenuItem = NSMenuItem()
@@ -453,12 +455,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if track.artworkURL != lastArtworkURL {
             lastArtworkURL = track.artworkURL
-            statusItem.button?.image = makeTextImage("♪")
-            artworkMenuItem.isHidden = true
+            statusItem.button?.image = Self.roundedImage(menubarPlaceholder)
+            updateArtworkMenuItem(image: menuPlaceholder, size: 250)
 
             SpotifyService.loadArtwork(from: track.artworkURL, size: 18) { [weak self] image in
                 guard let self, self.lastArtworkURL == track.artworkURL else { return }
-                self.statusItem.button?.image = image.map(Self.roundedImage(_:)) ?? self.makeTextImage("♪")
+                self.statusItem.button?.image = image.map(Self.roundedImage(_:)) ?? Self.roundedImage(self.menubarPlaceholder)
             }
 
             let artworkSize: CGFloat = 250
@@ -686,6 +688,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         result.isTemplate = false
         return result
+    }
+
+    private static func makePlaceholderArtwork(size: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let radius: CGFloat = size > 20 ? 6 : 4
+            let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+            NSColor.black.setFill()
+            path.fill()
+            path.addClip()
+
+            let symbol = "♪"
+            let fontSize = size * 0.4
+            let color = NSColor(red: 162/255.0, green: 56/255.0, blue: 255/255.0, alpha: 1.0)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
+                .foregroundColor: color
+            ]
+            let textSize = (symbol as NSString).size(withAttributes: attrs)
+            let x = (size - textSize.width) / 2
+            let y = (size - textSize.height) / 2
+            (symbol as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     private func makeTextImage(_ text: String) -> NSImage {

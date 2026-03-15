@@ -70,4 +70,10 @@ PLIST
 
 cp MenuPlay/MenuPlay/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "MenuPlay Developer"; then
+    codesign --force --sign "MenuPlay Developer" "$APP"
+else
+    codesign --force --sign - "$APP"
+fi
+
 echo "Built: $APP"

@@ -36,14 +36,14 @@ private final class ProgressBarView: NSView {
         }
     }
 
-    init(barFrame: NSRect) {
+    init(barFrame: NSRect, fillColor: NSColor = .white) {
         super.init(frame: barFrame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.3).cgColor
+        layer?.backgroundColor = fillColor.withAlphaComponent(0.3).cgColor
         layer?.cornerRadius = barFrame.height / 2
         layer?.masksToBounds = true
 
-        fillLayer.backgroundColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        fillLayer.backgroundColor = fillColor.withAlphaComponent(0.9).cgColor
         fillLayer.frame = .zero
         layer?.addSublayer(fillLayer)
     }
@@ -76,7 +76,7 @@ private final class ArtworkMenuView: NSView {
         return CGFloat(min(max(pos / trackDuration, 0), 1))
     }
 
-    init(image: NSImage, size: CGFloat, onClick: @escaping () -> Void, onSeek: @escaping (Double) -> Void) {
+    init(image: NSImage, size: CGFloat, accentColor: NSColor = .white, onClick: @escaping () -> Void, onSeek: @escaping (Double) -> Void) {
         self.onClick = onClick
         self.onSeek = onSeek
 
@@ -85,7 +85,7 @@ private final class ArtworkMenuView: NSView {
         let barY: CGFloat = 10
         self.progressBarView = ProgressBarView(barFrame: NSRect(
             x: 12 + barInset, y: barY, width: size - 2 * barInset, height: barHeight
-        ))
+        ), fillColor: accentColor)
 
         super.init(frame: NSRect(x: 0, y: 0, width: size + 24, height: size + 6))
 
@@ -452,7 +452,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             SpotifyService.loadArtwork(from: track.artworkURL, size: artworkSize) { [weak self] image in
                 guard let self, self.lastArtworkURL == track.artworkURL else { return }
                 guard let image else { return }
-                self.updateArtworkMenuItem(image: image, size: artworkSize)
+                let accent = SpotifyService.accentColor(for: track.artworkURL, from: image)
+                self.updateArtworkMenuItem(image: image, size: artworkSize, accentColor: accent)
             }
         }
     }
@@ -641,8 +642,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(webURL)
     }
 
-    private func updateArtworkMenuItem(image: NSImage, size: CGFloat) {
-        artworkMenuItem.view = ArtworkMenuView(image: image, size: size, onClick: { [weak self] in
+    private func updateArtworkMenuItem(image: NSImage, size: CGFloat, accentColor: NSColor = .white) {
+        artworkMenuItem.view = ArtworkMenuView(image: image, size: size, accentColor: accentColor, onClick: { [weak self] in
             self?.playPause()
         }, onSeek: { [weak self] position in
             SpotifyService.seek(to: position)

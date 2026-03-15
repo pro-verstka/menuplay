@@ -95,6 +95,7 @@ final class SpotifyService {
     private static let artworkQueue = DispatchQueue(label: "com.menuplay.artwork")
     private static let originalArtworkCache = NSCache<NSString, NSImage>()
     private static let resizedArtworkCache = NSCache<NSString, NSImage>()
+    private static let accentColorCache = NSCache<NSString, NSColor>()
     private static var pendingArtworkRequests: [String: [ArtworkRequest]] = [:]
 
     static func currentSnapshot() -> SpotifySnapshot {
@@ -273,6 +274,108 @@ final class SpotifyService {
 
     private static func resizedCacheKey(urlString: String, size: CGFloat) -> String {
         "\(urlString)#\(Int(size.rounded()))"
+    }
+
+    static func accentColor(for url: String, from image: NSImage) -> NSColor {
+        if let cached = accentColorCache.object(forKey: url as NSString) {
+            return cached
+        }
+        let color = extractAccentColor(from: image)
+        accentColorCache.setObject(color, forKey: url as NSString)
+        return color
+    }
+
+    private static func extractAccentColor(from image: NSImage) -> NSColor {
+        let sampleSize = 20
+        let bytesPerPixel = 4
+        let bytesPerRow = sampleSize * bytesPerPixel
+        var pixelData = [UInt8](repeating: 0, count: sampleSize * sampleSize * bytesPerPixel)
+
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: &pixelData,
+                  width: sampleSize,
+                  height: sampleSize,
+                  bitsPerComponent: 8,
+                  bytesPerRow: bytesPerRow,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return .white
+        }
+
+        let drawRect = CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return .white
+        }
+        context.draw(cgImage, in: drawRect)
+
+        let bucketCount = 12
+        var bucketWeight = [Double](repeating: 0, count: bucketCount)
+        var bucketHue = [Double](repeating: 0, count: bucketCount)
+        var bucketSat = [Double](repeating: 0, count: bucketCount)
+        var bucketBri = [Double](repeating: 0, count: bucketCount)
+
+        let totalPixels = sampleSize * sampleSize
+        for i in 0..<totalPixels {
+            let offset = i * bytesPerPixel
+            let r = CGFloat(pixelData[offset]) / 255.0
+            let g = CGFloat(pixelData[offset + 1]) / 255.0
+            let b = CGFloat(pixelData[offset + 2]) / 255.0
+
+            let color = NSColor(red: r, green: g, blue: b, alpha: 1.0)
+            var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
+            color.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
+
+            if s < 0.15 || br < 0.15 || br > 0.95 { continue }
+
+            let bucket = min(Int(h * Double(bucketCount)), bucketCount - 1)
+            let weight = Double(s) * sqrt(Double(br))
+            bucketWeight[bucket] += weight
+            bucketHue[bucket] += Double(h) * weight
+            bucketSat[bucket] += Double(s) * weight
+            bucketBri[bucket] += Double(br) * weight
+        }
+
+        guard let maxBucket = bucketWeight.enumerated().max(by: { $0.element < $1.element }),
+              maxBucket.element > 0 else {
+            return .white
+        }
+
+        let idx = maxBucket.offset
+        let w = bucketWeight[idx]
+        let avgHue = bucketHue[idx] / w
+        let avgSat = bucketSat[idx] / w
+        let avgBri = min(max(bucketBri[idx] / w, 0.4), 0.85)
+
+        let accent = NSColor(hue: avgHue, saturation: avgSat, brightness: avgBri, alpha: 1.0)
+
+        // Sample bottom ~15% of bitmap (rows 17-19) to check contrast against progress bar area
+        var bottomR = 0.0, bottomG = 0.0, bottomB = 0.0
+        let bottomStartRow = sampleSize - 3
+        let bottomPixelCount = 3 * sampleSize
+        for row in bottomStartRow..<sampleSize {
+            for col in 0..<sampleSize {
+                let offset = (row * sampleSize + col) * bytesPerPixel
+                bottomR += Double(pixelData[offset]) / 255.0
+                bottomG += Double(pixelData[offset + 1]) / 255.0
+                bottomB += Double(pixelData[offset + 2]) / 255.0
+            }
+        }
+        bottomR /= Double(bottomPixelCount)
+        bottomG /= Double(bottomPixelCount)
+        bottomB /= Double(bottomPixelCount)
+        let bottomLuminance = 0.299 * bottomR + 0.587 * bottomG + 0.114 * bottomB
+
+        var accentR: CGFloat = 0, accentG: CGFloat = 0, accentB: CGFloat = 0, accentA: CGFloat = 0
+        accent.getRed(&accentR, green: &accentG, blue: &accentB, alpha: &accentA)
+        let accentLuminance = 0.299 * Double(accentR) + 0.587 * Double(accentG) + 0.114 * Double(accentB)
+
+        if abs(accentLuminance - bottomLuminance) < 0.3 {
+            return bottomLuminance < 0.5 ? .white : .black
+        }
+
+        return accent
     }
 
     private static func resizedArtwork(for image: NSImage, size: CGFloat) -> NSImage {

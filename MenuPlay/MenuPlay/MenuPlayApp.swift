@@ -268,6 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var likeMenuItem: NSMenuItem!
     private var settingsWindow: NSWindow?
     private var aboutWindow: NSWindow?
+    private var updateMenuItem: NSMenuItem!
     private var currentLikedState: Bool = false
     private var lastPlayerPosition: Double = 0
     private var lastTrackDuration: Double = 0
@@ -338,6 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         aboutMenuItem.image = nil
         menu.addItem(aboutMenuItem)
 
+        updateMenuItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+        menu.addItem(updateMenuItem)
+
         let settingsMenuItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsMenuItem.image = nil
         menu.addItem(settingsMenuItem)
@@ -357,6 +361,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: .spotifyAuthChanged,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(updateStateChanged),
+            name: .updateStateChanged,
+            object: nil
+        )
+
+        UpdateService.shared.startPeriodicChecks()
 
         refreshNowPlaying(forceLikeRefresh: true)
     }
@@ -742,7 +755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 390),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 440),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -778,6 +791,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         aboutWindow = window
     }
 
+    @objc private func checkForUpdates() {
+        UpdateService.shared.checkForUpdate(manual: true)
+    }
+
+    @objc private func updateStateChanged() {
+        switch UpdateService.shared.state {
+        case .idle:
+            updateMenuItem.title = "Check for Updates..."
+            updateMenuItem.isEnabled = true
+        case .checking:
+            updateMenuItem.title = "Checking for Updates..."
+            updateMenuItem.isEnabled = false
+        case .available(let release):
+            updateMenuItem.title = "Update Available (\(release.version))"
+            updateMenuItem.isEnabled = true
+        case .downloading:
+            updateMenuItem.title = "Downloading Update..."
+            updateMenuItem.isEnabled = false
+        case .installing:
+            updateMenuItem.title = "Installing Update..."
+            updateMenuItem.isEnabled = false
+        case .failed:
+            updateMenuItem.title = "Update Failed — Retry"
+            updateMenuItem.isEnabled = true
+        }
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -786,6 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 struct SettingsView: View {
     @AppStorage("maxChars") private var maxChars: Int = defaultMaxChars
     @AppStorage("spotifyClientID") private var clientID: String = ""
+    @AppStorage("updateAutoCheckEnabled") private var autoCheckEnabled: Bool = true
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
     @State private var authState: SpotifyAuthState = SpotifyAPI.shared.authState
@@ -826,6 +867,13 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Divider()
+
+            Toggle("Check for updates automatically", isOn: $autoCheckEnabled)
+            Text("Checks once every 24 hours when enabled.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Divider()
 

@@ -23,7 +23,8 @@ xcrun --sdk macosx swiftc -O \
     MenuPlay/MenuPlay/MenuPlayApp.swift \
     MenuPlay/MenuPlay/KeychainStore.swift \
     MenuPlay/MenuPlay/SpotifyService.swift \
-    MenuPlay/MenuPlay/SpotifyAPI.swift
+    MenuPlay/MenuPlay/SpotifyAPI.swift \
+    MenuPlay/MenuPlay/UpdateService.swift
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

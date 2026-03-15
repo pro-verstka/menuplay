@@ -24,11 +24,69 @@ struct MenuPlayApp: App {
     }
 }
 
+private final class ProgressBarView: NSView {
+    private let fillLayer = CALayer()
+
+    var progress: CGFloat = 0 {
+        didSet {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            fillLayer.frame = CGRect(x: 0, y: 0, width: bounds.width * progress, height: bounds.height)
+            CATransaction.commit()
+        }
+    }
+
+    init(barFrame: NSRect) {
+        super.init(frame: barFrame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.3).cgColor
+        layer?.cornerRadius = barFrame.height / 2
+        layer?.masksToBounds = true
+
+        fillLayer.backgroundColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        fillLayer.frame = .zero
+        layer?.addSublayer(fillLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
 private final class ArtworkMenuView: NSView {
     private let onClick: () -> Void
+    private let onSeek: (Double) -> Void
+    private let progressBarView: ProgressBarView
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+    private var progressTimer: Timer?
 
-    init(image: NSImage, size: CGFloat, onClick: @escaping () -> Void) {
+    private var playerPosition: Double = 0
+    private var trackDuration: Double = 0
+    private var isPlaying: Bool = false
+    private var lastUpdateTime = Date()
+
+    private var currentProgress: CGFloat {
+        guard trackDuration > 0 else { return 0 }
+        var pos = playerPosition
+        if isPlaying {
+            pos += Date().timeIntervalSince(lastUpdateTime)
+        }
+        return CGFloat(min(max(pos / trackDuration, 0), 1))
+    }
+
+    init(image: NSImage, size: CGFloat, onClick: @escaping () -> Void, onSeek: @escaping (Double) -> Void) {
         self.onClick = onClick
+        self.onSeek = onSeek
+
+        let barInset: CGFloat = 12
+        let barHeight: CGFloat = 4
+        let barY: CGFloat = 10
+        self.progressBarView = ProgressBarView(barFrame: NSRect(
+            x: 12 + barInset, y: barY, width: size - 2 * barInset, height: barHeight
+        ))
+
         super.init(frame: NSRect(x: 0, y: 0, width: size + 24, height: size + 6))
 
         let imageView = NSImageView(image: image)
@@ -39,6 +97,10 @@ private final class ArtworkMenuView: NSView {
         imageView.layer?.masksToBounds = true
 
         addSubview(imageView)
+
+        progressBarView.alphaValue = 0
+        addSubview(progressBarView)
+
         toolTip = "Play/Pause"
         setAccessibilityElement(true)
         setAccessibilityLabel("Play/Pause")
@@ -50,6 +112,48 @@ private final class ArtworkMenuView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    func updateProgress(position: Double, duration: Double, isPlaying: Bool) {
+        self.playerPosition = position
+        self.trackDuration = duration
+        self.isPlaying = isPlaying
+        self.lastUpdateTime = Date()
+        progressBarView.progress = currentProgress
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        progressBarView.progress = currentProgress
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            progressBarView.animator().alphaValue = 1
+        }
+        startProgressTimer()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        stopProgressTimer()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            progressBarView.animator().alphaValue = 0
+        }
+    }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
     }
@@ -57,8 +161,40 @@ private final class ArtworkMenuView: NSView {
     override func mouseUp(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
         guard bounds.contains(location) else { return }
+
+        if isHovered && trackDuration > 0 {
+            let barFrame = progressBarView.frame
+            let hitArea = NSRect(x: barFrame.minX, y: barFrame.minY - 10, width: barFrame.width, height: barFrame.height + 20)
+            if hitArea.contains(location) {
+                let fraction = min(max((location.x - barFrame.minX) / barFrame.width, 0), 1)
+                let newPosition = Double(fraction) * trackDuration
+                playerPosition = newPosition
+                lastUpdateTime = Date()
+                progressBarView.progress = CGFloat(fraction)
+                onSeek(newPosition)
+                return
+            }
+        }
+
         onClick()
         enclosingMenuItem?.menu?.cancelTracking()
+    }
+
+    private func startProgressTimer() {
+        progressTimer?.invalidate()
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self, self.isHovered else { return }
+            self.progressBarView.progress = self.currentProgress
+        }
+    }
+
+    private func stopProgressTimer() {
+        progressTimer?.invalidate()
+        progressTimer = nil
+    }
+
+    deinit {
+        progressTimer?.invalidate()
     }
 }
 
@@ -133,6 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: NSWindow?
     private var aboutWindow: NSWindow?
     private var currentLikedState: Bool = false
+    private var lastPlayerPosition: Double = 0
+    private var lastTrackDuration: Double = 0
+    private var lastIsPlaying: Bool = false
 
     private var maxChars: Int {
         let defaults = UserDefaults.standard
@@ -269,6 +408,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showPlaybackStatus(snapshot.playbackState)
             return
         }
+
+        lastPlayerPosition = snapshot.playerPosition
+        lastTrackDuration = snapshot.trackDuration
+        lastIsPlaying = snapshot.playbackState == .playing
+        updateArtworkProgress()
 
         let shouldRefreshLikeState = forceLikeRefresh || track.trackID != lastTrack?.trackID
         if track == lastTrack {
@@ -498,10 +642,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateArtworkMenuItem(image: NSImage, size: CGFloat) {
-        artworkMenuItem.view = ArtworkMenuView(image: image, size: size) { [weak self] in
+        artworkMenuItem.view = ArtworkMenuView(image: image, size: size, onClick: { [weak self] in
             self?.playPause()
-        }
+        }, onSeek: { [weak self] position in
+            SpotifyService.seek(to: position)
+            self?.lastPlayerPosition = position
+            self?.updateArtworkProgress()
+        })
         artworkMenuItem.isHidden = false
+        updateArtworkProgress()
+    }
+
+    private func updateArtworkProgress() {
+        guard let artworkView = artworkMenuItem.view as? ArtworkMenuView else { return }
+        artworkView.updateProgress(
+            position: lastPlayerPosition,
+            duration: lastTrackDuration,
+            isPlaying: lastIsPlaying
+        )
     }
 
     private static func roundedImage(_ image: NSImage) -> NSImage {
@@ -745,19 +903,8 @@ struct SettingsView: View {
 struct AboutView: View {
     private let repositoryURL = URL(string: "https://github.com/pro-verstka/menuplay")!
     private let versionText: String = {
-        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-
-        if let shortVersion, let buildVersion {
-            return "\(shortVersion) (\(buildVersion))"
-        }
-        if let shortVersion {
-            return shortVersion
-        }
-        if let buildVersion {
-            return buildVersion
-        }
-        return "Unknown"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return version ?? "Unknown"
     }()
 
     var body: some View {

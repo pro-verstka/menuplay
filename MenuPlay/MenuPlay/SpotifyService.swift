@@ -82,6 +82,8 @@ enum SpotifyPlaybackState: String, Equatable {
 struct SpotifySnapshot {
     let playbackState: SpotifyPlaybackState
     let track: TrackInfo?
+    let playerPosition: Double
+    let trackDuration: Double
 }
 
 final class SpotifyService {
@@ -103,6 +105,8 @@ final class SpotifyService {
         set trackAlbum to ""
         set trackArtwork to ""
         set trackID to ""
+        set playerPos to 0
+        set trackDur to 0
 
         if application "Spotify" is running then
             tell application "Spotify"
@@ -119,22 +123,24 @@ final class SpotifyService {
                     set trackAlbum to album of current track
                     set trackArtwork to artwork url of current track
                     set trackID to id of current track
+                    set playerPos to ((player position) * 1000) as integer
+                    set trackDur to duration of current track
                 end if
             end tell
         end if
 
-        return {playbackStateValue, trackName, trackArtist, trackAlbum, trackArtwork, trackID}
+        return {playbackStateValue, trackName, trackArtist, trackAlbum, trackArtwork, trackID, playerPos, trackDur}
         """
 
         guard let appleScript = NSAppleScript(source: script) else {
-            return SpotifySnapshot(playbackState: .notRunning, track: nil)
+            return SpotifySnapshot(playbackState: .notRunning, track: nil, playerPosition: 0, trackDuration: 0)
         }
 
         var error: NSDictionary?
         let result = appleScript.executeAndReturnError(&error)
         guard error == nil,
-              result.numberOfItems == 6 else {
-            return SpotifySnapshot(playbackState: .notRunning, track: nil)
+              result.numberOfItems == 8 else {
+            return SpotifySnapshot(playbackState: .notRunning, track: nil, playerPosition: 0, trackDuration: 0)
         }
 
         let playbackState = SpotifyPlaybackState(
@@ -146,6 +152,9 @@ final class SpotifyService {
         let album = result.atIndex(4)?.stringValue ?? ""
         let artworkURL = result.atIndex(5)?.stringValue ?? ""
         let trackID = result.atIndex(6)?.stringValue ?? ""
+
+        let playerPositionMs = Double(result.atIndex(7)?.int32Value ?? 0)
+        let trackDurationMs = Double(result.atIndex(8)?.int32Value ?? 0)
 
         let track: TrackInfo?
         if name.isEmpty {
@@ -160,7 +169,7 @@ final class SpotifyService {
             )
         }
 
-        return SpotifySnapshot(playbackState: playbackState, track: track)
+        return SpotifySnapshot(playbackState: playbackState, track: track, playerPosition: playerPositionMs / 1000, trackDuration: trackDurationMs / 1000)
     }
 
     /// Extract bare Spotify ID from URI like "spotify:track:ABC123"
@@ -178,6 +187,17 @@ final class SpotifyService {
 
     static func nextTrack() {
         runSpotifyCommand("next track")
+    }
+
+    static func seek(to positionSeconds: Double) {
+        let script = """
+        if application "Spotify" is running then
+            tell application "Spotify" to set player position to \(positionSeconds)
+        end if
+        """
+        guard let appleScript = NSAppleScript(source: script) else { return }
+        var error: NSDictionary?
+        appleScript.executeAndReturnError(&error)
     }
 
     private static func runSpotifyCommand(_ command: String) {

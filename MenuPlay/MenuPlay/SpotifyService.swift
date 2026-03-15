@@ -310,11 +310,13 @@ final class SpotifyService {
         }
         context.draw(cgImage, in: drawRect)
 
+        // Phase 1: Classify pixels into chromatic/achromatic, bucket chromatic ones
         let bucketCount = 12
         var bucketWeight = [Double](repeating: 0, count: bucketCount)
         var bucketHue = [Double](repeating: 0, count: bucketCount)
         var bucketSat = [Double](repeating: 0, count: bucketCount)
         var bucketBri = [Double](repeating: 0, count: bucketCount)
+        var chromaticCount = 0
 
         let totalPixels = sampleSize * sampleSize
         for i in 0..<totalPixels {
@@ -327,7 +329,8 @@ final class SpotifyService {
             var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
             color.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
 
-            if s < 0.15 || br < 0.15 || br > 0.95 { continue }
+            guard s >= 0.12, br >= 0.10 else { continue }
+            chromaticCount += 1
 
             let bucket = min(Int(h * Double(bucketCount)), bucketCount - 1)
             let weight = Double(s) * sqrt(Double(br))
@@ -337,45 +340,113 @@ final class SpotifyService {
             bucketBri[bucket] += Double(br) * weight
         }
 
-        guard let maxBucket = bucketWeight.enumerated().max(by: { $0.element < $1.element }),
-              maxBucket.element > 0 else {
-            return .white
-        }
-
-        let idx = maxBucket.offset
-        let w = bucketWeight[idx]
-        let avgHue = bucketHue[idx] / w
-        let avgSat = bucketSat[idx] / w
-        let avgBri = min(max(bucketBri[idx] / w, 0.4), 0.85)
-
-        let accent = NSColor(hue: avgHue, saturation: avgSat, brightness: avgBri, alpha: 1.0)
-
-        // Sample bottom ~15% of bitmap (rows 17-19) to check contrast against progress bar area
+        // Phase 2: Analyze bottom 15% (rows 17-19)
         var bottomR = 0.0, bottomG = 0.0, bottomB = 0.0
+        var bottomH = 0.0, bottomS = 0.0, bottomBr = 0.0
         let bottomStartRow = sampleSize - 3
         let bottomPixelCount = 3 * sampleSize
         for row in bottomStartRow..<sampleSize {
             for col in 0..<sampleSize {
                 let offset = (row * sampleSize + col) * bytesPerPixel
-                bottomR += Double(pixelData[offset]) / 255.0
-                bottomG += Double(pixelData[offset + 1]) / 255.0
-                bottomB += Double(pixelData[offset + 2]) / 255.0
+                let r = Double(pixelData[offset]) / 255.0
+                let g = Double(pixelData[offset + 1]) / 255.0
+                let b = Double(pixelData[offset + 2]) / 255.0
+                bottomR += r
+                bottomG += g
+                bottomB += b
+                let c = NSColor(red: r, green: g, blue: b, alpha: 1.0)
+                var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
+                c.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
+                bottomH += Double(h)
+                bottomS += Double(s)
+                bottomBr += Double(br)
             }
         }
         bottomR /= Double(bottomPixelCount)
         bottomG /= Double(bottomPixelCount)
         bottomB /= Double(bottomPixelCount)
         let bottomLuminance = 0.299 * bottomR + 0.587 * bottomG + 0.114 * bottomB
+        let bottomAvgHue = bottomH / Double(bottomPixelCount)
+        let bottomAvgBri = bottomBr / Double(bottomPixelCount)
 
-        var accentR: CGFloat = 0, accentG: CGFloat = 0, accentB: CGFloat = 0, accentA: CGFloat = 0
-        accent.getRed(&accentR, green: &accentG, blue: &accentB, alpha: &accentA)
-        let accentLuminance = 0.299 * Double(accentR) + 0.587 * Double(accentG) + 0.114 * Double(accentB)
+        // Phase 3: Choose color by case
+        let chromaticRatio = Double(chromaticCount) / Double(totalPixels)
 
-        if abs(accentLuminance - bottomLuminance) < 0.3 {
+        // Case A: Achromatic cover
+        if chromaticRatio < 0.05 {
             return bottomLuminance < 0.5 ? .white : .black
         }
 
-        return accent
+        // We have chromatic content — find dominant bucket
+        guard let maxBucket = bucketWeight.enumerated().max(by: { $0.element < $1.element }),
+              maxBucket.element > 0 else {
+            return bottomLuminance < 0.5 ? .white : .black
+        }
+
+        let idx = maxBucket.offset
+        let w = bucketWeight[idx]
+        let avgHue = bucketHue[idx] / w
+        let avgSat = bucketSat[idx] / w
+        let avgBri = bucketBri[idx] / w
+
+        let finalHue = avgHue
+        var finalSat: Double
+        var finalBri: Double
+
+        if chromaticRatio < 0.35 {
+            // Case B: Accent minority (e.g. gold symbol on black)
+            finalSat = max(avgSat, 0.5)
+            if bottomLuminance < 0.35 {
+                finalBri = min(max(avgBri, 0.65), 0.95)
+            } else if bottomLuminance > 0.65 {
+                finalBri = min(max(avgBri, 0.35), 0.60)
+            } else {
+                finalBri = min(max(avgBri, 0.50), 0.85)
+            }
+        } else {
+            // Case C: Dominant chromatic
+            let hueDiff = abs(avgHue - bottomAvgHue)
+            let hueDist = min(hueDiff, 1.0 - hueDiff)
+
+            if hueDist < 0.08 {
+                // Case C1: Accent hue matches background (monochrome cover)
+                finalSat = min(avgSat + 0.15, 1.0)
+                if bottomAvgBri > 0.55 {
+                    finalBri = bottomAvgBri - 0.30
+                } else if bottomAvgBri < 0.45 {
+                    finalBri = bottomAvgBri + 0.35
+                } else {
+                    finalBri = 0.85
+                }
+                finalBri = min(max(finalBri, 0.25), 0.95)
+            } else {
+                // Case C2: Accent hue differs from background
+                finalBri = min(max(avgBri, 0.40), 0.85)
+                finalSat = avgSat
+                let accentLum = 0.299 * finalBri + 0.587 * finalBri + 0.114 * finalBri
+                if abs(accentLum - bottomLuminance) < 0.2 {
+                    finalBri += bottomLuminance < 0.5 ? 0.25 : -0.25
+                    finalBri = min(max(finalBri, 0.40), 0.85)
+                }
+            }
+        }
+
+        // Phase 4: Final contrast safety
+        let resultColor = NSColor(hue: finalHue, saturation: finalSat, brightness: finalBri, alpha: 1.0)
+        var rr: CGFloat = 0, rg: CGFloat = 0, rb: CGFloat = 0, ra: CGFloat = 0
+        resultColor.getRed(&rr, green: &rg, blue: &rb, alpha: &ra)
+        let accentLuminance = 0.299 * Double(rr) + 0.587 * Double(rg) + 0.114 * Double(rb)
+
+        if abs(accentLuminance - bottomLuminance) < 0.15 {
+            if bottomLuminance < 0.5 {
+                finalBri += 0.20
+            } else {
+                finalBri -= 0.20
+            }
+            finalBri = min(max(finalBri, 0.15), 0.95)
+        }
+
+        return NSColor(hue: finalHue, saturation: finalSat, brightness: finalBri, alpha: 1.0)
     }
 
     private static func resizedArtwork(for image: NSImage, size: CGFloat) -> NSImage {

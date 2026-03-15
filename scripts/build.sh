@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 BUILD_DIR="$PWD/build"
 APP="$BUILD_DIR/MenuPlay.app"
 MODULE_CACHE="$BUILD_DIR/module-cache"
-APP_VERSION="1.2.0"
+APP_VERSION="1.3.0"
 APP_BUILD="1"
 
 rm -rf "$APP" "$MODULE_CACHE"

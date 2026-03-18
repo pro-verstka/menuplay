@@ -101,7 +101,6 @@ private final class ArtworkMenuView: NSView {
         progressBarView.alphaValue = 0
         addSubview(progressBarView)
 
-        toolTip = "Play/Pause"
         setAccessibilityElement(true)
         setAccessibilityLabel("Play/Pause")
         setAccessibilityRole(.button)

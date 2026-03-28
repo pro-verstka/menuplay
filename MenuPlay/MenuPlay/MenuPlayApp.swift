@@ -853,18 +853,22 @@ struct SettingsView: View {
     @AppStorage("maxChars") private var maxChars: Int = defaultMaxChars
     @AppStorage("spotifyClientID") private var clientID: String = ""
     @AppStorage("updateAutoCheckEnabled") private var autoCheckEnabled: Bool = true
+    @State private var maxCharsText: String = ""
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @State private var launchAtLoginError: String?
     @State private var authState: SpotifyAuthState = SpotifyAPI.shared.authState
+    @FocusState private var isMaxCharsFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Max characters")
                 Spacer()
-                TextField("", value: $maxChars, format: .number)
+                TextField("", text: $maxCharsText)
                     .frame(width: 60)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isMaxCharsFocused)
+                    .onSubmit(commitMaxChars)
             }
             Text("Limits the track title length in the menu bar (\(maxCharsRange.lowerBound)-\(maxCharsRange.upperBound)).")
                 .font(.caption)
@@ -960,18 +964,23 @@ struct SettingsView: View {
         .frame(width: 380)
         .onAppear {
             maxChars = clampedMaxChars(maxChars)
+            maxCharsText = "\(maxChars)"
             launchAtLogin = SMAppService.mainApp.status == .enabled
             authState = SpotifyAPI.shared.authState
         }
-        .onChange(of: maxChars) { _, newValue in
-            let clampedValue = clampedMaxChars(newValue)
-            if newValue != clampedValue {
-                maxChars = clampedValue
-            }
+        .onChange(of: isMaxCharsFocused) { _, focused in
+            if !focused { commitMaxChars() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .spotifyAuthChanged)) { _ in
             authState = SpotifyAPI.shared.authState
         }
+    }
+
+    private func commitMaxChars() {
+        if let value = Int(maxCharsText) {
+            maxChars = clampedMaxChars(value)
+        }
+        maxCharsText = "\(maxChars)"
     }
 }
 

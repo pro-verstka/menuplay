@@ -370,6 +370,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil
         )
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(maxCharsChanged),
+            name: .maxCharsChanged,
+            object: nil
+        )
+
         UpdateService.shared.startPeriodicChecks()
 
         refreshNowPlaying(forceLikeRefresh: true)
@@ -392,6 +399,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 showLegacyTrackInfo(for: track)
             }
         }
+    }
+
+    @objc private func maxCharsChanged() {
+        guard let track = lastTrack else { return }
+        let displayText = truncate("\(track.name) — \(track.artist)", max: maxChars)
+        statusItem.button?.title = " \(displayText)"
     }
 
     @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
@@ -981,7 +994,12 @@ struct SettingsView: View {
             maxChars = clampedMaxChars(value)
         }
         maxCharsText = "\(maxChars)"
+        NotificationCenter.default.post(name: .maxCharsChanged, object: nil)
     }
+}
+
+extension Notification.Name {
+    static let maxCharsChanged = Notification.Name("maxCharsChanged")
 }
 
 struct AboutView: View {

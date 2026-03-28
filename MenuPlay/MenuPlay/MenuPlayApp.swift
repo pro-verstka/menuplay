@@ -2,7 +2,7 @@ import SwiftUI
 import ServiceManagement
 
 private let defaultMaxChars = 20
-private let maxCharsRange = 10...80
+private let maxCharsRange = 1...30
 
 private func clampedMaxChars(_ value: Int) -> Int {
     min(max(value, maxCharsRange.lowerBound), maxCharsRange.upperBound)
